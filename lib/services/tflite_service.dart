@@ -1,4 +1,3 @@
-// object_detector.dart
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
@@ -7,7 +6,7 @@ import 'package:image/image.dart' as img;
 
 class ObjectDetector {
   late Interpreter _interpreter;
-  List<String> _labels = [];
+  late List<String> labels;
 
   ObjectDetector._();
 
@@ -21,10 +20,10 @@ class ObjectDetector {
     try {
       _interpreter = await Interpreter.fromAsset('assets/model.tflite');
       String labelsData = await rootBundle.loadString('assets/labels.txt');
-      _labels = labelsData.split('\n').map((e) => e.trim()).toList();
-      print("Model Loaded Successfully");
+      labels = labelsData.split('\n');
+      print("✅ Model & Labels Loaded Successfully");
     } catch (e) {
-      print("Model not Loaded $e");
+      print("❌ Model Loading Failed: $e");
     }
   }
 
@@ -34,51 +33,48 @@ class ObjectDetector {
       return null;
     }
 
+    // 📌 सही इनपुट डेटा तैयार करें
     var input = preprocessImage(imageFile);
-
     var inputTensor = _interpreter.getInputTensor(0);
-    var inputShape = inputTensor.shape;
     var outputTensor = _interpreter.getOutputTensor(0);
-    var outputShape = outputTensor.shape;
 
-    print(
-        "✅ Corrected Input Tensor Shape: $inputShape, Output Tensor Shape: $outputShape");
+    print("✅ Expected Input Shape: ${inputTensor.shape}");
+    print("✅ Expected Output Shape: ${outputTensor.shape}");
 
-    if (inputShape.length != 4 ||
-        inputShape[1] != 224 ||
-        inputShape[2] != 224 ||
-        inputShape[3] != 3) {
-      print(
-          "❌ Input shape is incorrect! Expected [1, 224, 224, 3], but got $inputShape");
-      return null;
-    }
+    // ✅ आउटपुट लिस्ट बनाएं
+    var output = List.generate(
+        outputTensor.shape[1], (i) => List.filled(outputTensor.shape[2], 0.0));
 
-    var output = List.filled(outputShape[1], 0);
+    // ✅ मॉडल को रन करें
     _interpreter.run(input, output);
 
-    print("✅ Model output: $output");
+    print("✅ Model Output: $output");
     return output;
   }
 
-  Float32List preprocessImage(File imageFile) {
+  Uint8List preprocessImage(File imageFile) {
     img.Image? image = img.decodeImage(imageFile.readAsBytesSync());
     img.Image resizedImage = img.copyResize(image!, width: 224, height: 224);
 
-    Float32List convertedBytes = Float32List(224 * 224 * 3);
+    Uint8List inputBytes = Uint8List(224 * 224 * 3);
     int index = 0;
 
     for (int y = 0; y < 224; y++) {
       for (int x = 0; x < 224; x++) {
         img.Pixel pixel =
-            resizedImage.getPixel(x, y); // ✅ Corrected: Pixel object
+            resizedImage.getPixelSafe(x, y); // ✅ `getPixelSafe()` का उपयोग करें
 
-        convertedBytes[index++] = pixel.r.toDouble() / 255.0; // Normalize Red
-        convertedBytes[index++] = pixel.g.toDouble() / 255.0; // Normalize Green
-        convertedBytes[index++] = pixel.b.toDouble() / 255.0; // Normalize Blue
+        int red = pixel.r.toInt(); // 🔴 रेड वैल्यू
+        int green = pixel.g.toInt(); // 🟢 ग्रीन वैल्यू
+        int blue = pixel.b.toInt(); // 🔵 ब्लू वैल्यू
+
+        inputBytes[index++] = red;
+        inputBytes[index++] = green;
+        inputBytes[index++] = blue;
       }
     }
 
-    return convertedBytes;
+    return inputBytes;
   }
 
   void close() {
