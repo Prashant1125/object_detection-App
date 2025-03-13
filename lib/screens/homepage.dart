@@ -11,9 +11,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   File? _image;
-  List<dynamic>? _recognitions;
-  final picker = ImagePicker();
-  ObjectDetector? objectDetector;
+  List<Map<String, dynamic>>? _recognitions;
+  final ImagePicker _picker = ImagePicker();
+  ObjectDetector? _detector;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -22,49 +23,82 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeDetector() async {
-    objectDetector = await ObjectDetector.create();
-    setState(() {});
-  }
-
-  Future<void> _pickImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        _image = File(pickedFile.path);
-      });
-      await _detectObjects();
+    try {
+      _detector = await ObjectDetector.create();
+    } catch (e) {
+      _showError("Detector init failed: ${e.toString()}");
     }
   }
 
-  Future<void> _detectObjects() async {
-    if (_image == null || objectDetector == null) return;
-    List<dynamic>? results = await objectDetector!.detect(_image!);
+  Future<void> _pickImage() async {
+    final file = await _picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+
     setState(() {
-      _recognitions = results;
+      _image = File(file.path);
+      _isLoading = true;
     });
+
+    await _detectObjects();
+    setState(() => _isLoading = false);
   }
 
-  @override
-  void dispose() {
-    objectDetector?.close();
-    super.dispose();
+  // In your HomeScreen
+  Future<void> _detectObjects() async {
+    if (_image == null || _detector == null) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final results = await _detector!.detect(_image!);
+      setState(() => _recognitions = results);
+    } catch (e) {
+      print(e.toString());
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Object Detection")),
-      body: Stack(
-        children: [
-          if (_image != null) Image.file(_image!),
-          if (_recognitions != null)
-            ..._recognitions!.map((res) => BoundingBox(res)).toList(),
-        ],
-      ),
+      appBar: AppBar(title: const Text('1x1 Model Demo')),
+      body: _buildMainContent(),
       floatingActionButton: FloatingActionButton(
-        onPressed: _pickImage,
-        child: Icon(Icons.image),
+        onPressed: _isLoading ? null : _pickImage,
+        child: _isLoading
+            ? const CircularProgressIndicator()
+            : const Icon(Icons.image),
       ),
     );
+  }
+
+  Widget _buildMainContent() {
+    if (_image == null) {
+      return const Center(child: Text('Select an image'));
+    }
+
+    return Stack(
+      children: [
+        Center(child: Image.file(_image!, fit: BoxFit.contain)),
+        if (_recognitions != null)
+          ..._recognitions!.map((r) => BoundingBox(r)).toList(),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _detector?.dispose();
+    super.dispose();
   }
 }

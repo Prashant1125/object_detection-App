@@ -6,142 +6,120 @@ import 'package:image/image.dart' as img;
 
 class ObjectDetector {
   late Interpreter _interpreter;
-  late List<String> labels;
-  static const int INPUT_SIZE = 300; // Update with your model's input size
-  static const double THRESHOLD = 0.5; // Confidence threshold
+  late List<String> _labels;
+  late TfLiteType _inputType;
+  static const double _confidenceThreshold = 0.5;
 
   ObjectDetector._();
 
   static Future<ObjectDetector> create() async {
     final detector = ObjectDetector._();
-    await detector._loadModel();
+    await detector._initialize();
     return detector;
+  }
+
+  Future<void> _initialize() async {
+    await _loadModel();
+    await _loadLabels();
+    _verifyModelStructure();
   }
 
   Future<void> _loadModel() async {
     try {
       _interpreter = await Interpreter.fromAsset('assets/model.tflite');
-      labels = await _loadLabels('assets/labels.txt');
-      print("✅ Model & Labels Loaded Successfully");
     } catch (e) {
-      print("❌ Model Loading Failed: $e");
-      rethrow;
+      throw Exception('Model initialization failed: $e');
     }
   }
 
-  Future<List<String>> _loadLabels(String path) async {
-    try {
-      final data = await rootBundle.loadString(path);
-      return data.split('\n').where((label) => label.isNotEmpty).toList();
-    } catch (e) {
-      throw Exception("Failed to load labels: $e");
-    }
+  Future<void> _loadLabels() async {
+    final data = await rootBundle.loadString('assets/labels.txt');
+    _labels = data.split('\n').where((line) => line.trim().isNotEmpty).toList();
+    if (_labels.isEmpty) throw Exception('No labels found');
   }
 
-  img.Image _resizeAndConvertImage(img.Image image) {
-    return img.copyResize(
-      image,
-      width: INPUT_SIZE,
-      height: INPUT_SIZE,
-      interpolation: img.Interpolation.nearest,
-    );
+  void _verifyModelStructure() {
+    final inputTensor = _interpreter.getInputTensor(0);
+    _inputType = inputTensor.type;
+    print('Input type: $_inputType');
   }
 
-  Float32List _convertImageToFloat32List(img.Image image) {
-    final inputShape = _interpreter.getInputTensor(0).shape;
-    final inputSize = inputShape[1]; // Assuming NHWC format
-
-    final resizedImage =
-        img.copyResize(image, width: inputSize, height: inputSize);
-
-    final bytes = resizedImage.getBytes(order: img.ChannelOrder.rgb);
-    final floatBuffer = Float32List(inputSize * inputSize * 3);
-
-    for (int i = 0; i < bytes.length; i += 3) {
-      final r = bytes[i];
-      final g = bytes[i + 1];
-      final b = bytes[i + 2];
-
-      // Update normalization based on your model's requirements
-      floatBuffer[i] = (r / 255.0); // Example normalization
-      floatBuffer[i + 1] = (g / 255.0);
-      floatBuffer[i + 2] = (b / 255.0);
-    }
-
-    return floatBuffer;
-  }
-
-  List<Map<String, dynamic>> _processOutput(
-    List<dynamic> detectionBoxes,
-    List<dynamic> detectionClasses,
-    List<dynamic> detectionScores,
-  ) {
-    final results = <Map<String, dynamic>>[];
-
-    for (int i = 0; i < detectionScores.length; i++) {
-      final score = detectionScores[i] as double;
-      if (score < THRESHOLD) continue;
-
-      final classIndex = detectionClasses[i] as int;
-      final className = labels[classIndex];
-
-      final box = detectionBoxes
-          .sublist(i * 4, (i + 1) * 4)
-          .map((e) => e as double)
-          .toList();
-
-      results.add({
-        'class': className,
-        'confidence': score,
-        'rect': box,
-      });
-    }
-
-    return results;
-  }
+  bool get _isQuantized => _inputType == TfLiteType.uint8;
 
   Future<List<Map<String, dynamic>>> detect(File imageFile) async {
     try {
-      // Preprocess image
-      final imageBytes = await imageFile.readAsBytes();
-      final image = img.decodeImage(imageBytes);
-      if (image == null) throw Exception("Failed to decode image");
-
-      final processedImage = _resizeAndConvertImage(image);
-      final inputBuffer = _convertImageToFloat32List(processedImage);
-
-      // Setup output buffers
-      final outputBoxes = List.filled(10 * 4, 0.0).reshape([1, 10, 4]);
-      final outputClasses = List.filled(10, 0.0).reshape([1, 10]);
-      final outputScores = List.filled(10, 0.0).reshape([1, 10]);
-      final outputCount = List.filled(1, 0.0).reshape([1]);
-
-      // Run inference
-      _interpreter.run(
-        {
-          0: inputBuffer.reshape([1, INPUT_SIZE, INPUT_SIZE, 3])
-        },
-        {
-          0: outputBoxes,
-          1: outputClasses,
-          2: outputScores,
-          3: outputCount,
-        },
-      );
-
-      // Process results
-      return _processOutput(
-        outputBoxes[0],
-        outputClasses[0].map((e) => e.toInt()).toList(),
-        outputScores[0],
-      );
+      final image = await _processImage(imageFile);
+      final input = _createInput(image);
+      final output = _runInference(input);
+      return _processOutput(output);
     } catch (e) {
-      print("Detection error: $e");
-      return [];
+      throw Exception('Detection failed: $e');
     }
   }
 
-  void close() {
-    _interpreter?.close();
+  Future<img.Image> _processImage(File file) async {
+    final bytes = await file.readAsBytes();
+    final image = img.decodeImage(bytes);
+    if (image == null) throw Exception('Invalid image file');
+    return img.copyResize(image, width: 1, height: 1);
   }
+
+  dynamic _createInput(img.Image image) {
+    final pixel = image.getPixel(0, 0);
+    return _isQuantized
+        ? _createQuantizedInput(pixel)
+        : _createFloatInput(pixel);
+  }
+
+  Uint8List _createQuantizedInput(img.Pixel pixel) {
+    return Uint8List.fromList([
+      pixel.r.toInt(),
+      pixel.g.toInt(),
+      pixel.b.toInt(),
+    ]);
+  }
+
+  Float32List _createFloatInput(img.Pixel pixel) {
+    return Float32List.fromList([
+      pixel.r / 255.0,
+      pixel.g / 255.0,
+      pixel.b / 255.0,
+    ]);
+  }
+
+  List<List<List<double>>> _runInference(dynamic input) {
+    final outputBuffer = List<double>.filled(1 * 12804 * 4, 0.0);
+    final reshapedOutput = _reshapeOutput(outputBuffer);
+
+    _interpreter.run(
+      _isQuantized
+          ? (input as Uint8List).reshape([1, 1, 1, 3])
+          : (input as Float32List).reshape([1, 1, 1, 3]),
+      {0: reshapedOutput},
+    );
+
+    return reshapedOutput;
+  }
+
+  List<List<List<double>>> _reshapeOutput(List<double> output) {
+    return List.generate(1,
+        (i) => List.generate(12804, (j) => output.sublist(j * 4, (j + 1) * 4)));
+  }
+
+  List<Map<String, dynamic>> _processOutput(List<List<List<double>>> output) {
+    return output[0]
+        .map((box) => {
+              'rect': {
+                'x': box[0],
+                'y': box[1],
+                'width': box[2],
+                'height': box[3],
+              },
+              'confidence': _confidenceThreshold,
+              'label': _labels.isNotEmpty ? _labels[0] : 'unknown',
+            })
+        .toList();
+  }
+
+  void dispose() => _interpreter.close();
 }
