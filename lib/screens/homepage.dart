@@ -38,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _detectObjects() async {
     if (_image == null || objectDetector == null) return;
-    List<dynamic>? results = await objectDetector!.runModelOnImage(_image!);
+    List<dynamic>? results = await objectDetector!.detect(_image!);
     setState(() {
       _recognitions = results;
     });

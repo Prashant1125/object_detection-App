@@ -7,6 +7,8 @@ import 'package:image/image.dart' as img;
 class ObjectDetector {
   late Interpreter _interpreter;
   late List<String> labels;
+  static const int INPUT_SIZE = 300; // Update with your model's input size
+  static const double THRESHOLD = 0.5; // Confidence threshold
 
   ObjectDetector._();
 
@@ -19,131 +21,127 @@ class ObjectDetector {
   Future<void> _loadModel() async {
     try {
       _interpreter = await Interpreter.fromAsset('assets/model.tflite');
-      String labelsData = await rootBundle.loadString('assets/labels.txt');
-
-      labels = labelsData
-          .split('\n')
-          .map((label) => label.trim())
-          .where((label) => label.isNotEmpty)
-          .toList();
-
-      if (labels.isEmpty) {
-        throw Exception("❌ Labels file is empty.");
-      }
-
+      labels = await _loadLabels('assets/labels.txt');
       print("✅ Model & Labels Loaded Successfully");
     } catch (e) {
       print("❌ Model Loading Failed: $e");
+      rethrow;
     }
   }
 
-  Uint8List? preprocessImage(File imageFile) {
-    Uint8List imageBytes = imageFile.readAsBytesSync();
-
-    if (imageBytes.isEmpty) {
-      print("❌ Image file is empty.");
-      return null;
-    }
-
-    img.Image? image = img.decodeImage(imageBytes);
-    if (image == null) {
-      print("❌ Image decoding failed.");
-      return null;
-    }
-
-    img.Image resizedImage = img.copyResize(image, width: 224, height: 224);
-
-    Uint8List inputBytes = Uint8List(224 * 224 * 3);
-    int index = 0;
-
-    for (int y = 0; y < 224; y++) {
-      for (int x = 0; x < 224; x++) {
-        img.Pixel pixel = resizedImage.getPixelSafe(x, y);
-
-        int red = pixel.r.toInt();
-        int green = pixel.g.toInt();
-        int blue = pixel.b.toInt();
-
-        inputBytes[index++] = red;
-        inputBytes[index++] = green;
-        inputBytes[index++] = blue;
-      }
-    }
-
-    return inputBytes;
-  }
-
-  Future<List<dynamic>?> runModelOnImage(File imageFile) async {
-    if (_interpreter == null) {
-      print("❌ Model not loaded yet!");
-      return null;
-    }
-
+  Future<List<String>> _loadLabels(String path) async {
     try {
-      // 🔹 Image Processing
-      Uint8List? inputBytes = preprocessImage(imageFile);
-      if (inputBytes == null || inputBytes.isEmpty) {
-        throw Exception("❌ Image processing failed.");
-      }
+      final data = await rootBundle.loadString(path);
+      return data.split('\n').where((label) => label.isNotEmpty).toList();
+    } catch (e) {
+      throw Exception("Failed to load labels: $e");
+    }
+  }
 
-      // 🔹 Input और Output Tensor चेक करें
-      Tensor? inputTensor = _interpreter.getInputTensor(0);
-      Tensor? outputTensor = _interpreter.getOutputTensor(0);
+  img.Image _resizeAndConvertImage(img.Image image) {
+    return img.copyResize(
+      image,
+      width: INPUT_SIZE,
+      height: INPUT_SIZE,
+      interpolation: img.Interpolation.nearest,
+    );
+  }
 
-      if (inputTensor == null || outputTensor == null) {
-        throw Exception(
-            "❌ Tensor is null. Model may not be initialized properly.");
-      }
+  Float32List _convertImageToFloat32List(img.Image image) {
+    final inputShape = _interpreter.getInputTensor(0).shape;
+    final inputSize = inputShape[1]; // Assuming NHWC format
 
-      print("✅ Expected Input Shape: ${inputTensor.shape}");
-      print("✅ Expected Output Shape: ${outputTensor.shape}");
+    final resizedImage =
+        img.copyResize(image, width: inputSize, height: inputSize);
 
-      // 🔹 Input Data Initialization
-      var inputShape = inputTensor.shape;
-      var outputShape = outputTensor.shape;
+    final bytes = resizedImage.getBytes(order: img.ChannelOrder.rgb);
+    final floatBuffer = Float32List(inputSize * inputSize * 3);
 
-      if (inputShape.isEmpty || outputShape.isEmpty) {
-        throw Exception("❌ Tensor shape is invalid.");
-      }
+    for (int i = 0; i < bytes.length; i += 3) {
+      final r = bytes[i];
+      final g = bytes[i + 1];
+      final b = bytes[i + 2];
 
-      var inputData = List.generate(
-          inputShape[0],
-          (i) => List.generate(
-              inputShape[1],
-              (j) => List.generate(
-                  inputShape[2], (k) => List.filled(inputShape[3], 0))),
-          growable: false);
+      // Update normalization based on your model's requirements
+      floatBuffer[i] = (r / 255.0); // Example normalization
+      floatBuffer[i + 1] = (g / 255.0);
+      floatBuffer[i + 2] = (b / 255.0);
+    }
 
-      int index = 0;
-      for (int i = 0; i < 224; i++) {
-        for (int j = 0; j < 224; j++) {
-          inputData[0][0][0][0] = inputBytes[index++];
-        }
-      }
+    return floatBuffer;
+  }
 
-      // 🔹 Output Data Initialization
-      var output = List.generate(
-          outputShape[0],
-          (i) => List.generate(
-              outputShape[1], (j) => List.filled(outputShape[2], 0.0)));
+  List<Map<String, dynamic>> _processOutput(
+    List<dynamic> detectionBoxes,
+    List<dynamic> detectionClasses,
+    List<dynamic> detectionScores,
+  ) {
+    final results = <Map<String, dynamic>>[];
 
-      if (output.isEmpty) {
-        throw Exception("❌ Output tensor initialization failed.");
-      }
+    for (int i = 0; i < detectionScores.length; i++) {
+      final score = detectionScores[i] as double;
+      if (score < THRESHOLD) continue;
 
-      // 🔹 Run Model
-      _interpreter.run(inputData, output);
-      print("✅ Model Output: $output");
+      final classIndex = detectionClasses[i] as int;
+      final className = labels[classIndex];
 
-      return output;
-    } catch (e, stackTrace) {
-      print("❌ Error in runModelOnImage: $e");
-      print(stackTrace);
-      return null;
+      final box = detectionBoxes
+          .sublist(i * 4, (i + 1) * 4)
+          .map((e) => e as double)
+          .toList();
+
+      results.add({
+        'class': className,
+        'confidence': score,
+        'rect': box,
+      });
+    }
+
+    return results;
+  }
+
+  Future<List<Map<String, dynamic>>> detect(File imageFile) async {
+    try {
+      // Preprocess image
+      final imageBytes = await imageFile.readAsBytes();
+      final image = img.decodeImage(imageBytes);
+      if (image == null) throw Exception("Failed to decode image");
+
+      final processedImage = _resizeAndConvertImage(image);
+      final inputBuffer = _convertImageToFloat32List(processedImage);
+
+      // Setup output buffers
+      final outputBoxes = List.filled(10 * 4, 0.0).reshape([1, 10, 4]);
+      final outputClasses = List.filled(10, 0.0).reshape([1, 10]);
+      final outputScores = List.filled(10, 0.0).reshape([1, 10]);
+      final outputCount = List.filled(1, 0.0).reshape([1]);
+
+      // Run inference
+      _interpreter.run(
+        {
+          0: inputBuffer.reshape([1, INPUT_SIZE, INPUT_SIZE, 3])
+        },
+        {
+          0: outputBoxes,
+          1: outputClasses,
+          2: outputScores,
+          3: outputCount,
+        },
+      );
+
+      // Process results
+      return _processOutput(
+        outputBoxes[0],
+        outputClasses[0].map((e) => e.toInt()).toList(),
+        outputScores[0],
+      );
+    } catch (e) {
+      print("Detection error: $e");
+      return [];
     }
   }
 
   void close() {
-    _interpreter.close();
+    _interpreter?.close();
   }
 }
