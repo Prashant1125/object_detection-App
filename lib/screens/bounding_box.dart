@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class BoundingBox extends StatelessWidget {
   final Map<String, dynamic> detection;
 
-  const BoundingBox(this.detection, {Key? key}) : super(key: key);
+  const BoundingBox(this.detection, {super.key});
 
   @override
   Widget build(BuildContext context) {

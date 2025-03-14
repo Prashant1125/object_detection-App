@@ -7,7 +7,7 @@ import 'package:image/image.dart' as img;
 class ObjectDetector {
   late Interpreter _interpreter;
   late List<String> _labels;
-  late TfLiteType _inputType;
+  late TensorType _inputType;
   static const double _confidenceThreshold = 0.5;
 
   ObjectDetector._();
@@ -44,7 +44,7 @@ class ObjectDetector {
     print('Input type: $_inputType');
   }
 
-  bool get _isQuantized => _inputType == TfLiteType.uint8;
+  bool get _isQuantized => _inputType == TensorType.uint8;
 
   Future<List<Map<String, dynamic>>> detect(File imageFile) async {
     try {
