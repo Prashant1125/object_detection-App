@@ -25,7 +25,7 @@ class BoundingBox extends StatelessWidget {
           style: TextStyle(
             color: Colors.white,
             fontSize: 12,
-            backgroundColor: Colors.black.withOpacity(0.7),
+            backgroundColor: Colors.black.withAlpha((0.7 * 255).round()),
           ),
         ),
       ),

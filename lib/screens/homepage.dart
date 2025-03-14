@@ -26,7 +26,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       _detector = await ObjectDetector.create();
     } catch (e) {
-      _showError("Detector init failed: ${e.toString()}");
+      _showError('Detector Init Failed: ${e.toString()}');
     }
   }
 
@@ -36,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _image = File(file.path);
+      _recognitions = null;
       _isLoading = true;
     });
 
@@ -43,55 +44,49 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isLoading = false);
   }
 
-  // In your HomeScreen
   Future<void> _detectObjects() async {
     if (_image == null || _detector == null) return;
-
-    setState(() => _isLoading = true);
 
     try {
       final results = await _detector!.detect(_image!);
       setState(() => _recognitions = results);
     } catch (e) {
-      print(e.toString());
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      _showError(e.toString());
     }
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 5),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('1x1 Model Demo')),
-      body: _buildMainContent(),
+      appBar: AppBar(title: const Text('Object Detector')),
+      body: _buildBody(),
       floatingActionButton: FloatingActionButton(
         onPressed: _isLoading ? null : _pickImage,
+        tooltip: 'Pick Image',
         child: _isLoading
-            ? const CircularProgressIndicator()
+            ? const CircularProgressIndicator(color: Colors.white)
             : const Icon(Icons.image),
       ),
     );
   }
 
-  Widget _buildMainContent() {
-    if (_image == null) {
-      return const Center(child: Text('Select an image'));
-    }
-
+  Widget _buildBody() {
     return Stack(
       children: [
-        Center(child: Image.file(_image!, fit: BoxFit.contain)),
+        if (_image != null)
+          Center(child: Image.file(_image!, fit: BoxFit.contain)),
         if (_recognitions != null)
-          ..._recognitions!.map((r) => BoundingBox(r)).toList(),
+          ..._recognitions!.map((res) => BoundingBox(res)).toList(),
+        if (_isLoading) const Center(child: CircularProgressIndicator()),
+        if (_image == null)
+          const Center(child: Text('Select an image to start detection')),
       ],
     );
   }
